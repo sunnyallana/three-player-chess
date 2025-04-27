@@ -1,0 +1,850 @@
+<!doctype html>
+<html>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+
+    <script>
+        var pieces_pack = new Image();
+        pieces_pack.src = "/client/img/pieces.png";
+
+        class Line {
+            constructor(x0, y0, x1, y1) {
+                this.a = y1 - y0;
+                this.b = x0 - x1;
+                this.c = -this.a * x0 - this.b * y0;
+            }
+            getY(x) {
+                return (-this.c - this.a * x) / this.b;
+            }
+        }
+
+        class Rotate {
+            constructor(angle) {
+                this.angle = (angle * Math.PI) / 180;
+            }
+            rotate(x, y) {
+                return [
+                    x * Math.cos(this.angle) - y * Math.sin(this.angle),
+                    x * Math.sin(this.angle) + y * Math.cos(this.angle),
+                ];
+            }
+        }
+
+        window.requestAnimFrame = (function () {
+            return (
+                window.requestAnimationFrame ||
+                window.webkitRequestAnimationFrame ||
+                window.mozRequestAnimationFrame ||
+                window.oRequestAnimationFrame ||
+                window.msRequestAnimationFrame ||
+                function (a) {
+                    window.setTimeout(a, 1e3 / 60);
+                }
+            );
+        })();
+
+        function drawCell(
+            ctxs,
+            i,
+            j,
+            cds,
+            status,
+            hlighted = false,
+            checked = false,
+            beaten_piece = false,
+        ) {
+            let ctx = i % 2 == j % 2 ? ctxs[0] : ctxs[1];
+            ctx.beginPath();
+            ctx.moveTo(cds[0][0], cds[0][1]);
+            ctx.lineTo(cds[1][0], cds[1][1]);
+            ctx.lineTo(cds[2][0], cds[2][1]);
+            ctx.lineTo(cds[3][0], cds[3][1]);
+            ctx.closePath();
+            if (i % 2 == j % 2) {
+                ctx.fillStyle =
+                    hlighted && status != "hold"
+                        ? "#bfb34a"
+                        : status == "hold"
+                          ? "#7a8850"
+                          : "#b58863";
+            } else {
+                ctx.fillStyle =
+                    hlighted && status != "hold"
+                        ? "#dfe27a"
+                        : status == "hold"
+                          ? "#98ad7a"
+                          : "#f0d9b5";
+            }
+            if (checked) {
+                ctx.fillStyle = "#e94035";
+                ctx.fill();
+            } else if (!beaten_piece) {
+                ctx.fill();
+            } else {
+                ctx.fillStyle = i % 2 == j % 2 ? "#85794e" : "#adb187";
+                ctx.fill();
+            }
+        }
+
+        function drawSide(ctx, a, b, r) {
+            let cells_coords = {};
+            let x0 = (-b * Math.sqrt(3)) / 2;
+            let ra = a + b / 2;
+            let y0 = ra;
+            let x1 = 0;
+            let y1 = y0;
+            let dx = (x1 - x0) / 4;
+            let dy0 = a / 4;
+            let dy1 = ra / 4;
+            let l1 = new Line(x0, y0, x1, y1);
+            for (let i = 0; i < 4; i++) {
+                cells_coords[i] = {};
+                row_coords = [];
+                y0 -= dy0;
+                y1 -= dy1;
+                let l2 = new Line(x0, y0, x1, y1);
+                let curx = x0;
+                for (let j = 0; j < 4; j++) {
+                    cells_coords[i][j] = [
+                        r.rotate(curx, l1.getY(curx)),
+                        r.rotate(curx + dx, l1.getY(curx + dx)),
+                        r.rotate(curx + dx, l2.getY(curx + dx)),
+                        r.rotate(curx, l2.getY(curx)),
+                        r.rotate(
+                            curx + dx / 2,
+                            (l2.getY(curx + dx / 2) + l1.getY(curx + dx / 2)) /
+                                2,
+                        ),
+                    ];
+                    drawCell(ctx, i, j, cells_coords[i][j]);
+                    curx += dx;
+                }
+                l1 = l2;
+            }
+            x1 = -x0;
+            x0 = 0;
+            y0 = ra;
+            y1 = y0;
+            dy0 = ra / 4;
+            dy1 = a / 4;
+            l1 = new Line(x0, y0, x1, y1);
+            for (let i = 0; i < 4; i++) {
+                y0 -= dy0;
+                y1 -= dy1;
+                let l2 = new Line(x0, y0, x1, y1);
+                let curx = x0;
+                for (let j = 0; j < 4; j++) {
+                    cells_coords[i][j + 4] = [
+                        r.rotate(curx, l1.getY(curx)),
+                        r.rotate(curx + dx, l1.getY(curx + dx)),
+                        r.rotate(curx + dx, l2.getY(curx + dx)),
+                        r.rotate(curx, l2.getY(curx)),
+                        r.rotate(
+                            curx + dx / 2,
+                            (l2.getY(curx + dx / 2) + l1.getY(curx + dx / 2)) /
+                                2,
+                        ),
+                    ];
+                    drawCell(ctx, i, j, cells_coords[i][j + 4]);
+                    curx += dx;
+                }
+                l1 = l2;
+            }
+            return cells_coords;
+        }
+
+        Array.prototype.equals = function (array) {
+            if (!array) return false;
+            if (this.length != array.length) return false;
+            for (let i = 0, l = this.length; i < l; i++) {
+                if (this[i] instanceof Array && array[i] instanceof Array) {
+                    if (!this[i].equals(array[i])) return false;
+                } else if (this[i] != array[i]) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        Object.defineProperty(Array.prototype, "equals", { enumerable: false });
+
+        function process(my_side) {
+            var chatText = document.getElementById("chat-text");
+            var chatInput = document.getElementById("chat-input");
+            var chatForm = document.getElementById("chat-form");
+
+            let timers = [
+                document.getElementById("timer1"),
+                document.getElementById("timer2"),
+                document.getElementById("timer3"),
+            ];
+            let timerLabels = [
+                document.getElementById("timer-label1"),
+                document.getElementById("timer-label2"),
+                document.getElementById("timer-label3"),
+            ];
+            let move_sound = document.getElementById("move_sound");
+            let capture_sound = document.getElementById("capture_sound");
+            let canvas = document.getElementById("canvas");
+            let ctx = [
+                document.getElementById("layer1").getContext("2d"),
+                document.getElementById("layer2").getContext("2d"),
+                canvas.getContext("2d"),
+            ];
+            ctx[2].imageSmoothingEnabled = false;
+            for (let i = 0; i < ctx.length; i++) {
+                ctx[i].translate(canvas.width / 2, canvas.height / 2);
+                ctx[i].fillStyle = "#f0f0f0";
+                ctx[i].clearRect(
+                    -canvas.width / 2,
+                    -canvas.height / 2,
+                    canvas.width,
+                    canvas.height,
+                );
+            }
+            let a = 280;
+            let b = 310;
+            let sides = [];
+            let rots = [new Rotate(0), new Rotate(120), new Rotate(240)];
+            let sides_order =
+                my_side == 0 ? [0, 1, 2] : my_side == 1 ? [1, 2, 0] : [2, 0, 1];
+            let sbp =
+                my_side == 0 ? [0, 1, 2] : my_side == 1 ? [2, 0, 1] : [1, 2, 0];
+            for (let i = 0; i < 3; i++) {
+                sides.push(drawSide(ctx, a, b, rots[i]));
+            }
+            let psz = 60;
+
+            pieces_offset = { R: 2, N: 3, B: 4, Q: 0, K: 1, P: 5 };
+
+            var board = null;
+
+            function add_to_chat(data) {
+                chatText.innerHTML += "<div>" + data + "</div>";
+                chatText.scrollTop = chatText.scrollHeight;
+            }
+
+            socket.on("add_to_chat", (data) => add_to_chat(data));
+
+            chatForm.onsubmit = function (e) {
+                e.preventDefault();
+                socket.emit("send_message", chatInput.value);
+                chatInput.value = "";
+                chatInput.blur();
+            };
+
+            socket.on("receive_board", function (gboard) {
+                if (board == null) {
+                    board = gboard;
+
+                    let reset_lights = function () {
+                        for (let s = 0; s < 3; s++) {
+                            for (let i = 0; i < 4; i++) {
+                                for (let j = 0; j < 8; j++) {
+                                    board.cells[s][i][j].hlighted = false;
+                                }
+                            }
+                        }
+                    };
+                    reset_lights();
+
+                    let turn_cells_off = function () {
+                        for (let s = 0; s < 3; s++) {
+                            for (let i = 0; i < 4; i++) {
+                                for (let j = 0; j < 8; j++) {
+                                    board.cells[s][i][j].status = "off";
+                                }
+                            }
+                        }
+                    };
+                    turn_cells_off();
+
+                    let reset_checked_status = function () {
+                        for (let s = 0; s < 3; s++) {
+                            for (let i = 0; i < 4; i++) {
+                                for (let j = 0; j < 8; j++) {
+                                    board.cells[s][i][j].checked = false;
+                                }
+                            }
+                        }
+                    };
+                    reset_checked_status();
+
+                    let reset_beaten_status = function () {
+                        for (let s = 0; s < 3; s++) {
+                            for (let i = 0; i < 4; i++) {
+                                for (let j = 0; j < 8; j++) {
+                                    board.cells[s][i][j].beaten = false;
+                                }
+                            }
+                        }
+                    };
+                    reset_beaten_status();
+
+                    let update_cell = function (data) {
+                        let pstat =
+                            board.cells[data.side][data.row][data.col].status;
+                        let hlt =
+                            board.cells[data.side][data.row][data.col].hlighted;
+                        let chkd =
+                            board.cells[data.side][data.row][data.col].checked;
+                        board.cells[data.side][data.row][data.col] = data.piece;
+                        board.cells[data.side][data.row][data.col].status =
+                            pstat;
+                        if (data.status == "hlight") {
+                            board.cells[data.side][data.row][
+                                data.col
+                            ].hlighted = true;
+                        } else if (data.status == "hoff") {
+                            board.cells[data.side][data.row][
+                                data.col
+                            ].hlighted = false;
+                        } else {
+                            board.cells[data.side][data.row][
+                                data.col
+                            ].hlighted = hlt;
+                        }
+                        if (data.status == "checkon") {
+                            board.cells[data.side][data.row][data.col].checked =
+                                true;
+                        } else if (data.status == "checkoff") {
+                            board.cells[data.side][data.row][data.col].checked =
+                                false;
+                        } else {
+                            board.cells[data.side][data.row][data.col].checked =
+                                chkd;
+                        }
+                    };
+
+                    socket.on("update_cell", (data) => update_cell(data));
+
+                    socket.on("receive_beaten", function (btn_pcs) {
+                        for (let i = 0; i < btn_pcs.length; i++) {
+                            cell = btn_pcs[i];
+                            board.cells[cell[0]][cell[1]][cell[2]].beaten =
+                                true;
+                        }
+                    });
+
+                    socket.on("game_end", function () {
+                        add_to_chat("<span class='game-end'>GAME END</span>");
+                    });
+
+                    let update = function () {
+                        window.requestAnimFrame(update);
+                        for (let i = 0; i < ctx.length; i++) {
+                            ctx[i].clearRect(
+                                -canvas.width / 2,
+                                -canvas.height / 2,
+                                canvas.width,
+                                canvas.height,
+                            );
+                        }
+                        for (let s = 0; s < 3; s++) {
+                            let cur_side = sbp[s];
+                            for (let i = 0; i < 4; i++) {
+                                for (let j = 0; j < 8; j++) {
+                                    drawCell(
+                                        ctx,
+                                        i,
+                                        j,
+                                        sides[cur_side][i][j],
+                                        board.cells[s][i][j].status,
+                                        board.cells[s][i][j].hlighted,
+                                        board.cells[s][i][j].checked,
+                                    );
+                                    let cds = sides[cur_side][i][j][4];
+                                    if (board.cells[s][i][j].beaten) {
+                                        if (board.cells[s][i][j].side != -1) {
+                                            drawCell(
+                                                ctx,
+                                                i,
+                                                j,
+                                                sides[cur_side][i][j],
+                                                board.cells[s][i][j].status,
+                                                board.cells[s][i][j].hlighted,
+                                                board.cells[s][i][j].checked,
+                                                true,
+                                            );
+                                        } else {
+                                            ctx[2].beginPath();
+                                            let rad = 12;
+                                            ctx[2].arc(
+                                                cds[0],
+                                                cds[1],
+                                                rad,
+                                                0,
+                                                2 * Math.PI,
+                                                false,
+                                            );
+                                            ctx[2].fillStyle =
+                                                i % 2 == j % 2
+                                                    ? "#85794e"
+                                                    : "#adb187";
+                                            ctx[2].fill();
+                                        }
+                                    }
+                                    if (board.cells[s][i][j].side != -1) {
+                                        ctx[2].drawImage(
+                                            pieces_pack,
+                                            psz *
+                                                pieces_offset[
+                                                    board.cells[s][i][j].type
+                                                        .name
+                                                ],
+                                            psz * board.cells[s][i][j].side,
+                                            psz,
+                                            psz,
+                                            cds[0] - psz / 2,
+                                            cds[1] - psz / 2,
+                                            psz,
+                                            psz,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    };
+                    update();
+
+                    let isInside = function (x, y, corners) {
+                        for (let i = 0; i < 4; i++) {
+                            let j = (i + 1) % 4;
+                            if (
+                                (corners[i][0] - x) * (corners[j][1] - y) -
+                                    (corners[j][0] - x) * (corners[i][1] - y) >
+                                0
+                            ) {
+                                return false;
+                            }
+                        }
+                        return true;
+                    };
+
+                    let cell_by_coords = function (x, y) {
+                        for (let s = 0; s < 3; s++) {
+                            for (let i = 0; i < 4; i++) {
+                                for (let j = 0; j < 8; j++) {
+                                    if (isInside(x, y, sides[s][i][j])) {
+                                        return [sides_order[s], i, j];
+                                    }
+                                }
+                            }
+                        }
+                    };
+
+                    let is_mouse_down = false;
+                    let hold_cell = null;
+
+                    canvas.addEventListener("mousedown", function (e) {
+                        let x = e.offsetX - canvas.width / 2;
+                        let y = e.offsetY - canvas.height / 2;
+                        let cell = cell_by_coords(x, y);
+                        if (cell != null) {
+                            if (cell.equals(hold_cell)) {
+                                turn_cells_off();
+                                reset_beaten_status();
+                                hold_cell = null;
+                            } else {
+                                if (hold_cell != null) {
+                                    turn_cells_off();
+                                    reset_beaten_status();
+                                }
+                                if (
+                                    hold_cell != null &&
+                                    board.cells[hold_cell[0]][hold_cell[1]][
+                                        hold_cell[2]
+                                    ].side == my_side &&
+                                    board.cells[cell[0]][cell[1]][cell[2]]
+                                        .side != my_side
+                                ) {
+                                    socket.emit("make_move", hold_cell, cell);
+                                    hold_cell = null;
+                                } else {
+                                    hold_cell = cell;
+                                    board.cells[cell[0]][cell[1]][
+                                        cell[2]
+                                    ].status = "hold";
+                                    socket.emit("request_beaten", cell);
+                                    is_mouse_down = true;
+                                }
+                            }
+                        }
+                    });
+
+                    let mhold_cell = null;
+
+                    canvas.addEventListener("mousemove", function (e) {
+                        if (is_mouse_down) {
+                            let x = e.offsetX - canvas.width / 2;
+                            let y = e.offsetY - canvas.height / 2;
+                            let cell = cell_by_coords(x, y);
+
+                            if (cell == null || !cell.equals(mhold_cell)) {
+                                if (mhold_cell != null) {
+                                    board.cells[mhold_cell[0]][mhold_cell[1]][
+                                        mhold_cell[2]
+                                    ].status = "off";
+                                }
+                                if (cell != null && !cell.equals(hold_cell)) {
+                                    board.cells[cell[0]][cell[1]][
+                                        cell[2]
+                                    ].status = "hold";
+                                    mhold_cell = cell;
+                                }
+                            }
+                        }
+                    });
+
+                    canvas.addEventListener("mouseup", function (e) {
+                        let x = e.offsetX - canvas.width / 2;
+                        let y = e.offsetY - canvas.height / 2;
+                        let cell = cell_by_coords(x, y);
+                        if (hold_cell != null && !hold_cell.equals(cell)) {
+                            turn_cells_off();
+                            reset_beaten_status();
+                            socket.emit("make_move", hold_cell, cell);
+                            hold_cell = null;
+                        }
+                        mhold_cell = null;
+                        is_mouse_down = false;
+                    });
+
+                    canvas.addEventListener("mouseleave", function (e) {
+                        if (is_mouse_down) {
+                            if (hold_cell != null) {
+                                board.cells[hold_cell[0]][hold_cell[1]][
+                                    hold_cell[2]
+                                ].status = "off";
+                                hold_cell = null;
+                            }
+                            reset_beaten_status();
+                            is_mouse_down = false;
+                        }
+                    });
+                }
+            });
+            socket.on("made_move", function () {
+                move_sound.pause();
+                move_sound.currentTime = 0;
+                move_sound.play();
+            });
+            socket.on("beat_move", function () {
+                capture_sound.pause();
+                capture_sound.currentTime = 0;
+                capture_sound.play();
+            });
+            socket.on("update_timers", function (t) {
+                for (let i = 0; i < 3; i++) {
+                    let minutes = (
+                        "0" + Math.floor(t[i] / 60000).toString()
+                    ).slice(-2);
+                    let seconds = (
+                        "0" + (Math.floor(t[i] / 1000) % 60).toString()
+                    ).slice(-2);
+                    timers[i].textContent = minutes + ":" + seconds;
+
+                    // Highlight the active player's timer
+                    if (i === board.current_player) {
+                        timerLabels[i].style.color = "#4ecdc4";
+                        timers[i].style.border = "1px solid #4ecdc4";
+                    } else {
+                        timerLabels[i].style.color = "#f0f0f0";
+                        timers[i].style.border =
+                            "1px solid rgba(255, 255, 255, 0.1)";
+                    }
+                }
+            });
+            function waitForBoard() {
+                setTimeout(function () {
+                    socket.emit("request_board");
+                    if (board != null) {
+                        return;
+                    } else {
+                        waitForBoard();
+                    }
+                }, 100);
+            }
+            waitForBoard();
+        }
+
+        init = function () {
+            socket = io();
+            socket.on("connect", function () {
+                socket.on("side", function (side) {
+                    console.log(side);
+                    process(side);
+                });
+            });
+        };
+    </script>
+
+    <style>
+        /* Modern font imports */
+        @import url("https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&family=Montserrat:wght@300;400;500&display=swap");
+
+        /* General Styling */
+        body {
+            margin: 0;
+            padding: 0;
+            background: #1a1a2e;
+            font-family: "Roboto", sans-serif;
+            color: #f0f0f0;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* Main layout container */
+        .main-container {
+            display: flex;
+            width: 100%;
+            height: 100vh;
+            max-width: 1400px;
+        }
+
+        /* Game container styling */
+        .game-container {
+            position: relative;
+            width: 1000px;
+            height: 1000px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* Side panel for chat and timers */
+        .side-panel {
+            width: 300px;
+            padding: 20px;
+            background: rgba(26, 26, 46, 0.5);
+            border-left: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            box-sizing: border-box;
+        }
+
+        /* Canvas container */
+        .canvas-container {
+            position: relative;
+            width: 1000px;
+            height: 1000px;
+        }
+
+        /* Canvas styling */
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        /* Timer styling */
+        .timer-container {
+            margin-bottom: 30px;
+        }
+
+        .timer-container h3 {
+            font-family: "Montserrat", sans-serif;
+            font-size: 18px;
+            font-weight: 400;
+            margin-bottom: 15px;
+            color: #f0f0f0;
+            text-align: center;
+        }
+
+        .timers-wrapper {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .timer-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .timer-label {
+            width: 80px;
+            font-family: "Montserrat", sans-serif;
+            font-size: 16px;
+            font-weight: 400;
+            color: #f0f0f0;
+        }
+
+        .timer {
+            flex: 1;
+            height: 50px;
+            font-family: "Montserrat", sans-serif;
+            font-size: 28px;
+            font-weight: 300;
+            background: rgba(26, 26, 46, 0.7);
+            border-radius: 12px;
+            padding: 5px 15px;
+            color: #f0f0f0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+            backdrop-filter: blur(5px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            -khtml-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            transition: border 0.3s ease;
+        }
+
+        /* Chat styling */
+        .chat-container {
+            flex: 1;
+            background: rgba(26, 26, 46, 0.8);
+            border-radius: 12px;
+            backdrop-filter: blur(5px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 5px 25px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .chat-container h3 {
+            font-family: "Montserrat", sans-serif;
+            font-size: 18px;
+            font-weight: 400;
+            padding: 10px 15px;
+            margin: 0;
+            background: rgba(0, 0, 0, 0.2);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        #chat-text {
+            width: 100%;
+            flex: 1;
+            overflow-y: auto;
+            padding: 15px;
+            box-sizing: border-box;
+            color: #f0f0f0;
+            font-family: "Roboto", sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+        }
+
+        #chat-text::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        #chat-text::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        #chat-text::-webkit-scrollbar-thumb {
+            background-color: rgba(255, 255, 255, 0.3);
+            border-radius: 3px;
+        }
+
+        #chat-form {
+            width: 100%;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 10px;
+            box-sizing: border-box;
+        }
+
+        #chat-input {
+            width: 100%;
+            padding: 8px 15px;
+            border: none;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            color: #f0f0f0;
+            font-family: "Roboto", sans-serif;
+            font-size: 14px;
+            outline: none;
+            transition: background 0.3s;
+            box-sizing: border-box;
+        }
+
+        #chat-input:focus {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .game-end {
+            color: #e94035;
+            font-weight: bold;
+            font-size: 18px;
+            display: block;
+            text-align: center;
+            padding: 5px 0;
+            background: rgba(233, 64, 53, 0.1);
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+    </style>
+
+    <body onload="init()">
+        <div class="main-container">
+            <div class="game-container">
+                <div class="canvas-container">
+                    <canvas id="layer1" width="1000" height="1000"></canvas>
+                    <canvas id="layer2" width="1000" height="1000"></canvas>
+                    <canvas id="canvas" width="1000" height="1000"></canvas>
+                </div>
+            </div>
+
+            <div class="side-panel">
+                <div class="timer-container">
+                    <h3>Players' Time</h3>
+                    <div class="timers-wrapper">
+                        <div class="timer-item">
+                            <div id="timer-label1" class="timer-label">
+                                White
+                            </div>
+                            <div id="timer1" class="timer">00:00</div>
+                        </div>
+                        <div class="timer-item">
+                            <div id="timer-label2" class="timer-label">
+                                Black
+                            </div>
+                            <div id="timer2" class="timer">00:00</div>
+                        </div>
+                        <div class="timer-item">
+                            <div id="timer-label3" class="timer-label">
+                                Gray
+                            </div>
+                            <div id="timer3" class="timer">00:00</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="chat-container">
+                    <h3>Chat</h3>
+                    <div id="chat-text">
+                        <div>
+                            <span style="color: #4ecdc4"
+                                >Welcome to Three-Player Chess</span
+                            >
+                        </div>
+                    </div>
+                    <form id="chat-form">
+                        <input
+                            id="chat-input"
+                            type="text"
+                            placeholder="Type your message..."
+                        />
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <audio src="/client/sound/move.mp3" id="move_sound"></audio>
+        <audio src="/client/sound/capture.mp3" id="capture_sound"></audio>
+    </body>
+</html>

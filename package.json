@@ -1,0 +1,31 @@
+{
+  "name": "3chess",
+  "version": "1.0.0",
+  "description": "Chess for 3 players",
+  "main": "app.js",
+  "dependencies": {
+    "express": "^4.18.2",
+    "minimist": ">=1.2.7",
+    "nodemon": "^2.0.20",
+    "paper": "^0.12.17",
+    "socket.io": "^4.5.4",
+    "yargs": "^17.6.2"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/magnickolas/3Chess.git"
+  },
+  "keywords": [
+    "chess"
+  ],
+  "author": "magnickolas",
+  "license": "GPL-3.0",
+  "bugs": {
+    "url": "https://github.com/magnickolas/3Chess/issues"
+  },
+  "homepage": "https://github.com/magnickolas/3Chess#readme"
+}
