@@ -4,7 +4,7 @@
 This project implements a rule-compliant digital version of three-player chess with a hexagonal board layout. The game adds triangular board geometry, multi-directional moving pieces, and dynamically converting alliances between players, filling the void of standardized implementations for this chess variant.
 
 ## Demo
-Watch our demonstration video: [Demo Video Link](https://)
+Watch our demonstration video: [Demo Video Link](https://youtu.be/e7oyk8sMBRE)
 
 ## Features
 - Hexagonal board layout for three-player gameplay
